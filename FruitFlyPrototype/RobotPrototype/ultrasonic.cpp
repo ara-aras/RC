@@ -15,6 +15,20 @@
 static float    _distanceCm   = 999.0f;
 static uint32_t _lastMeasure  = 0;
 
+// Median of the last 3 pings. A lone short echo (floor bounce, motor
+// noise, crosstalk) would otherwise trip the 30 cm stop for one cycle and
+// make the robot stutter; a real obstacle shows up in 2 of 3 pings, so the
+// extra delay is one ULTRASONIC_INTERVAL_MS at most.
+static float    _pings[3]     = {999.0f, 999.0f, 999.0f};
+static uint8_t  _pingIdx      = 0;
+
+static void pushPing(float cm) {
+    _pings[_pingIdx] = cm;
+    _pingIdx = (_pingIdx + 1) % 3;
+    float a = _pings[0], b = _pings[1], c = _pings[2];
+    _distanceCm = max(min(a, b), min(max(a, b), c));
+}
+
 // Written from ISR, read from loop()
 static volatile uint32_t _echoStartUs = 0;
 static volatile uint32_t _echoWidthUs = 0;
@@ -76,10 +90,10 @@ void ultrasonicUpdate() {
         interrupts();
         _echoPending = false;
         if (width == 0 || width > ULTRASONIC_TIMEOUT_US) {
-            _distanceCm = 999.0f;
+            pushPing(999.0f);
         } else {
             // Speed of sound ≈ 343 m/s → 0.0343 cm/µs, halved for the round trip
-            _distanceCm = (float)width * 0.01715f;
+            pushPing((float)width * 0.01715f);
         }
     }
 
@@ -87,7 +101,7 @@ void ultrasonicUpdate() {
 
     // Previous echo never returned within the interval → no object in range
     if (_echoPending) {
-        _distanceCm  = 999.0f;
+        pushPing(999.0f);
         _echoPending = false;
     }
     _lastMeasure = now;

@@ -72,10 +72,13 @@ class RobotClient:
     def status(self) -> RobotStatus:
         return RobotStatus.from_json(self._request("/api/status"))
 
-    def command(self, action: str, speed: int = 0) -> dict:
-        return self._request(
-            "/api/command", "POST", {"action": action, "speed": int(speed)}
-        )
+    def command(self, action: str, speed: int = 0, rc: bool = False) -> dict:
+        # rc=True is manual RC drive: the firmware skips range/bumper/cliff
+        # blocking for it (e-stop and the heartbeat timeout still apply).
+        payload = {"action": action, "speed": int(speed)}
+        if rc:
+            payload["rc"] = 1
+        return self._request("/api/command", "POST", payload)
 
     def heartbeat(self) -> dict:
         return self.command("HEARTBEAT", 0)
@@ -117,7 +120,7 @@ class SimulatedRobot:
             speed=self.last_speed,
         )
 
-    def command(self, action: str, speed: int = 0) -> dict:
+    def command(self, action: str, speed: int = 0, rc: bool = False) -> dict:
         if action == "EMERGENCY_STOP":
             self.estop = True
         elif action == "CLEAR_EMERGENCY":

@@ -47,6 +47,9 @@ struct RobotCommand {
     uint8_t       speed;
     uint32_t      sequence;
     uint32_t      timestamp;  // millis() at creation
+    // RC (manual) drive: a human is steering, so range/bumper/cliff checks
+    // do not block this command. E-stop and the source timeout still apply.
+    bool          rc = false;
 };
 
 // ============================================================

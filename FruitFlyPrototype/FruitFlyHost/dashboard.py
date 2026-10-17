@@ -96,7 +96,7 @@ class Dashboard:
     MANUAL_ACTIONS = {"STOP", "FORWARD", "BACKWARD", "LEFT", "RIGHT", "ROTATE_LEFT", "ROTATE_RIGHT"}
 
     def __init__(self, port: int, layout: NeuronLayout | None, push_camera=None,
-                 mode: str = "fly", manual_stale: float = 0.7):
+                 mode: str = "fly", manual_stale: float = 1.0):
         self.port = port
         self.layout = layout
         self.push_camera = push_camera
@@ -135,7 +135,16 @@ class Dashboard:
     def manual_command(self) -> tuple[str, int]:
         with self._lock:
             action, speed, when = self._manual
-        if action == "STOP" or time.monotonic() - when > self.manual_stale:
+        if action == "STOP":
+            return "STOP", 0
+        age = time.monotonic() - when
+        if age > self.manual_stale:
+            # Log once per dropped press: a held button that goes stale is
+            # Wi-Fi loss between phone and host, not the firmware stopping.
+            with self._lock:
+                if self._manual[2] == when:
+                    self._manual = ("STOP", 0, when)
+                    print(f"manual: {action} press went stale ({age:.2f} s without a repeat) -> STOP", flush=True)
             return "STOP", 0
         return action, speed
 

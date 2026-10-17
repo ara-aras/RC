@@ -139,11 +139,13 @@ def main() -> int:
 
                 mode = dashboard.mode if dashboard else "fly"
                 if mode == "manual":
-                    # /controls page drives. A press is repeated by the page
-                    # while held; anything older than manual_stale is a
-                    # dropped connection and becomes STOP.
+                    # /controls page drives like an RC car. A press is
+                    # repeated by the page while held; anything older than
+                    # manual_stale is a dropped connection and becomes STOP.
+                    # rc=True: the ESP32 does not block it for range,
+                    # bumpers or cliffs — only e-stop and link loss stop it.
                     m_action, m_speed = dashboard.manual_command()
-                    robot.command(m_action, m_speed)
+                    robot.command(m_action, m_speed, rc=True)
                     sent = (m_action, m_speed)
                     decision = Decision(m_action, m_speed, "manual control from /controls")
                 elif args.enable_motors:

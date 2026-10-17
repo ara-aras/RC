@@ -24,6 +24,7 @@ static uint32_t _lastHeartbeat[4] = {0, 0, 0, 0};
 static CommandSource _activeSource   = SRC_NONE;
 static CommandAction _currentAction  = CMD_STOP;
 static uint8_t       _currentSpeed   = DEFAULT_SPEED;
+static bool          _currentRc      = false;   // running motion came from manual RC drive
 static CommandSource _prevSource     = SRC_NONE;
 
 static int sourceIndex(CommandSource src) {
@@ -134,7 +135,7 @@ void controlSubmitCommand(const RobotCommand& cmd) {
     }
 
     // Local safety: obstacle, cliffs, bumpers. Blocked movement becomes STOP.
-    if (const char* why = safetyBlockReason(cmd.action)) {
+    if (const char* why = safetyBlockReason(cmd.action, cmd.rc)) {
         motorExecuteCommand(CMD_STOP, 0);
         _currentAction = CMD_STOP;
         stateSetCommand(CMD_STOP);
@@ -149,6 +150,7 @@ void controlSubmitCommand(const RobotCommand& cmd) {
     _activeSource  = cmd.source;
     _currentAction = cmd.action;
     _currentSpeed  = cmd.speed;
+    _currentRc     = cmd.rc;
 
     motorExecuteCommand(_currentAction, _currentSpeed);
 
@@ -203,7 +205,7 @@ void controlUpdate() {
     // Continuous safety: halt if the running motion became unsafe
     // (obstacle appeared, bumper hit, cliff seen) since it was accepted.
     if (_currentAction != CMD_STOP) {
-        if (const char* why = safetyBlockReason(_currentAction)) {
+        if (const char* why = safetyBlockReason(_currentAction, _currentRc)) {
             Serial.print(F("[CONTROL] Safety override, stopping: "));
             Serial.println(why);
             motorExecuteCommand(CMD_STOP, 0);

@@ -47,6 +47,8 @@
   .pad button.held{background:var(--L);color:#06222b;border-color:var(--L)}
   .pad button.held small{color:#06222b}
   .pad button.rot.held{background:var(--turn);border-color:var(--turn)}
+  .pad button.blocked{border-color:var(--bad,#e5484d);color:var(--bad,#e5484d)}
+  .pad button.blocked small{color:var(--bad,#e5484d);font-weight:600}
   .pad .centre{border-style:dashed;background:transparent;cursor:default;color:var(--muted);font-size:13px;line-height:1.3;text-align:center;padding:6px}
   .pad .centre b{color:var(--ink);font-weight:600;font-size:18px;display:block}
   .pad .centre b.stop{color:var(--stop)} .pad .centre b.go{color:var(--go)} .pad .centre b.turn{color:var(--turn)}
@@ -136,7 +138,7 @@ function showMode(m){
   mode=m;
   $('modeFly').setAttribute('aria-pressed',m==='fly'); $('modeManual').setAttribute('aria-pressed',m==='manual');
   $('pad').classList.toggle('off',m!=='manual');
-  $('hint').textContent=m==='manual'?'You drive. Hold a button to move; release to stop.':'The connectome drives. Switch to Manual to use the pad.';
+  $('hint').textContent=m==='manual'?'RC mode: you drive, the range sensor will not stop you. Hold to move; release to stop.':'The connectome drives. Switch to Manual to use the pad.';
 }
 async function setMode(m){
   release();
@@ -157,7 +159,7 @@ function press(btn){
   if(mode!=='manual') return;
   release(false);
   held=btn.dataset.action; heldBtn=btn; btn.classList.add('held');
-  send(held); repeat=setInterval(()=>send(held),250);   // bridge drops a press after 0.7 s
+  send(held); repeat=setInterval(()=>send(held),150);   // bridge drops a press after 1.0 s; ~6 lost repeats
 }
 function release(sendStop=true){
   if(repeat){ clearInterval(repeat); repeat=null; }
@@ -189,10 +191,14 @@ async function poll(){
   const sa=(sent.action||'STOP').toLowerCase().replace(/_/g,' ');
   $('t_sent').textContent=sa+(sent.speed?' '+sent.speed:'');
   const cmd=(r.command||'STOP').toLowerCase().replace(/_/g,' ');
+  // Manual is RC drive: the robot ignores its range sensor, so forward is never blocked here.
+  const fw=document.querySelector('#pad button[data-action="FORWARD"]'), blocked=!!r.obstacle&&r.connected&&mode!=='manual';
+  fw.classList.toggle('blocked',blocked);
+  fw.querySelector('small').textContent=blocked?'blocked · '+r.distance_cm.toFixed(0)+' cm':'forward';
   const d=$('doing'); d.textContent=cmd; d.className=cmd==='stop'?'stop':cmd==='forward'?'go':'turn';
   if(mode==='fly'&&s.decision) note('Fly brain: '+s.decision.reason);
   else if(r.emergency_stop) note('Emergency stop is latched. Clear it to drive.',true);
-  else if(r.obstacle) note('Obstacle ahead: the robot refuses forward until it is past 35 cm.');
+  else if(r.obstacle) note(`RC mode: something ${r.distance_cm.toFixed(0)} cm ahead. The robot will not stop for it; you are driving.`);
   else if(!held&&$('note').textContent.startsWith('Fly brain')) note('');
 }
 fetch('/api/mode').then(r=>r.json()).then(j=>showMode(j.mode)).catch(()=>{});

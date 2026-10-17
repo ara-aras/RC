@@ -73,12 +73,15 @@ void safetyUpdate() {
     _prevObstacle = _obstacleDetected;
 }
 
-const char* safetyBlockReason(CommandAction action) {
+const char* safetyBlockReason(CommandAction action, bool rc) {
     if (action == CMD_STOP || action == CMD_CLEAR_EMERGENCY || action == CMD_HEARTBEAT) {
         return nullptr;
     }
     // Latched Emergency Stop blocks all movement
     if (_emergencyStop) return "emergency stop";
+
+    // Manual RC drive: the human is the obstacle sensor
+    if (rc) return nullptr;
 
     // Front range sensor blocks only forward motion
     if (_obstacleDetected && action == CMD_FORWARD) return "obstacle ahead";

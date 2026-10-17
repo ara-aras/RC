@@ -91,9 +91,15 @@ switch, a speed slider (120–255) and a hold-to-drive pad (forward, back,
 arc left/right, rotate left/right). In manual mode the bridge sends what
 you hold and STOPs the moment you let go or the page loses contact; the
 brain keeps running so the dashboard stays live. Manual mode works **without**
-`--enable-motors` — pressing the pad is the explicit consent — but the
-ESP32's own range, bumper, cliff and e-stop rules still apply. Switch back
-to *Fly brain* to hand control to the connectome.
+`--enable-motors` — pressing the pad is the explicit consent.
+
+Manual is **RC-car drive**: the bridge marks each command `"rc":1` and the
+ESP32 then ignores its range sensor, bumpers and cliff sensors for it — you
+can drive right up to a wall or with your hand over the sensor. Only two
+things still stop it: the latched emergency stop, and losing the link (a
+press goes stale after 1.0 s on the host; the ESP32 halts after 1.5 s
+without heartbeats). Switch back to *Fly brain* to hand control to the
+connectome; its commands never carry `rc`, so all firmware safety returns.
 
 API behind the page:
 
@@ -101,7 +107,7 @@ API behind the page:
 |---|---|
 | `GET /api/mode` | `{"mode": "fly" \| "manual"}` |
 | `POST /api/mode` | `{"mode": "fly" \| "manual"}`; switching always clears any held press |
-| `POST /api/manual` | `{"action": "FORWARD" \| "BACKWARD" \| "LEFT" \| "RIGHT" \| "ROTATE_LEFT" \| "ROTATE_RIGHT" \| "STOP", "speed": 0..255}`; repeat while held, a press older than 0.7 s becomes STOP; 409 unless mode is manual |
+| `POST /api/manual` | `{"action": "FORWARD" \| "BACKWARD" \| "LEFT" \| "RIGHT" \| "ROTATE_LEFT" \| "ROTATE_RIGHT" \| "STOP", "speed": 0..255}`; repeat while held, a press older than 1.0 s becomes STOP (the page repeats every 150 ms); 409 unless mode is manual |
 | `POST /api/estop`, `POST /api/clear` | emergency stop / clear, forwarded to the ESP32 |
 
 `--mode manual` starts the bridge in manual mode.
@@ -144,7 +150,8 @@ with `--device cpu`; the CPU path is the one the phone uses anyway.
 | `--mode fly\|manual` | start in fly or manual (`/controls`) mode, default fly |
 
 Independent of these, the ESP32 stops at ≤ 30 cm (or LD2420 presence),
-latches its own e-stop, and halts if heartbeats stop for 1.5 s.
+latches its own e-stop, and halts if heartbeats stop for 1.5 s. The range,
+bumper and cliff stops are skipped for manual (`"rc":1`) commands only.
 
 ## How it avoids things
 

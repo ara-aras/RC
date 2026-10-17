@@ -20,6 +20,7 @@ bool safetyIsEmergencyStopped();
 bool safetyIsObstacleDetected();
 
 // Why a direction is blocked (for logs / telemetry). Returns nullptr if allowed.
-const char* safetyBlockReason(CommandAction action);
+// rc = manual RC drive: only the latched emergency stop can block it.
+const char* safetyBlockReason(CommandAction action, bool rc = false);
 
 #endif // SAFETY_MANAGER_H

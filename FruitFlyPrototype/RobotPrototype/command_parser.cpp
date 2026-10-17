@@ -88,5 +88,8 @@ bool parseJsonCommand(const String& body, RobotCommand& out) {
     int spd = extractJsonInt(body, "speed");
     out.speed = (spd >= 0 && spd <= 255) ? (uint8_t)spd : DEFAULT_SPEED;
 
+    // Optional "rc":1 marks a manual (RC car) command; absent means 0.
+    out.rc = extractJsonInt(body, "rc") == 1;
+
     return true;
 }
