@@ -124,13 +124,14 @@ def main() -> int:
             started = time.monotonic()
             tick += 1
             frame = camera.latest()
-            gray = frame.gray if frame else None
+            gray = frame.gray if frame else None              # dashboard eye views
+            eye = (frame.rgb if frame.rgb is not None else frame.gray) if frame else None  # retina: colour when we have it
             sent = ("STOP", 0)
             try:
                 status = robot.status()
                 connected = True
                 last_status = status
-                decision = controller.tick(gray, status)
+                decision = controller.tick(eye, status)
 
                 # Dashboard buttons: e-stop / clear go straight to the robot.
                 for req in (dashboard.pop_requests() if dashboard else []):
@@ -176,7 +177,7 @@ def main() -> int:
                     except ConnectionErrors:
                         pass
                 # keep the brain ticking so the dashboard stays alive
-                controller.tick(gray, last_status)
+                controller.tick(eye, last_status)
 
             if dashboard:
                 snap = controller.snapshot()

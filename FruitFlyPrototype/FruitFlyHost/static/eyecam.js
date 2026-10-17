@@ -12,7 +12,7 @@
  *         cam.start(); cam.stop(); cam.running
  */
 function EyeCam(opts) {
-  const o = Object.assign({ fps: 8, width: 320, facing: 'environment', quality: 0.6, onStatus: () => {} }, opts || {});
+  const o = Object.assign({ fps: 8, width: 320, facing: 'environment', quality: 0.6, timeoutMs: 1500, onStatus: () => {} }, opts || {});
   const video = document.createElement('video');
   video.setAttribute('playsinline', ''); video.muted = true; video.autoplay = true;
   const canvas = document.createElement('canvas');
@@ -40,12 +40,16 @@ function EyeCam(opts) {
     canvas.width = w; canvas.height = h;
     canvas.getContext('2d').drawImage(video, 0, 0, w, h);
     inflight = true;
+    // A push that never answers used to hold `inflight` forever and freeze
+    // the stream ("sent 9" and nothing after). Abort it so the next tick
+    // sends a fresh frame instead.
+    const ctl = new AbortController(), kill = setTimeout(() => ctl.abort(), o.timeoutMs);
     canvas.toBlob(b => {
-      if (!b) { inflight = false; return; }
-      fetch('/camera/push', { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: b })
+      if (!b) { clearTimeout(kill); inflight = false; return; }
+      fetch('/camera/push', { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: b, signal: ctl.signal, cache: 'no-store' })
         .then(r => { if (r.ok) sent++; else failed++; })
         .catch(() => failed++)
-        .finally(() => { inflight = false; status(`streaming ${w}x${h}  sent ${sent}` + (failed ? `  failed ${failed}` : '')); });
+        .finally(() => { clearTimeout(kill); inflight = false; status(`streaming ${w}x${h}  sent ${sent}` + (failed ? `  dropped ${failed}` : '')); });
     }, 'image/jpeg', o.quality);
   }
 

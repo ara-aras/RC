@@ -202,14 +202,14 @@ Plain clone (options A and B; git will ask for username and password —
 paste the token as the password):
 
 ```bash
-git clone https://github.com/Dinaltium/RC.git ~/RC
+git clone https://github.com/ara-aras/RC.git ~/RC
 ```
 
 Clone with the token in the address (option C; replace `<TOKEN>` with the
 token, keep the `@`):
 
 ```bash
-git clone https://<TOKEN>@github.com/Dinaltium/RC.git ~/RC
+git clone https://<TOKEN>@github.com/ara-aras/RC.git ~/RC
 ```
 
 You should see: `Receiving objects: 100%` and the prompt. If you see
@@ -504,8 +504,10 @@ Switch the toggle at the top to **Manual**. Set the speed slider (200 is a
 good start). Press and **hold** an arrow: the robot moves while your finger
 is down and stops when you let go. Manual mode works even though you did
 not start the host with `--enable-motors`; touching the pad is your
-permission. The robot still refuses to drive forward into anything closer
-than 30 cm and the bumpers still stop it.
+permission. Manual is RC-car drive: the robot does **not** stop for its
+range sensor or bumpers, so it will drive into a wall if you tell it to.
+Only **Emergency stop** and losing the Wi-Fi (it stops within about a
+second) override you.
 
 If left and right are swapped, tell the owner: there is a one-line setting
 in the firmware for that.

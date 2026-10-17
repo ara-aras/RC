@@ -352,13 +352,21 @@ function drawEye(id, eye, mask, w, h, half){
 /* ================= poll ================= */
 function setDot(id,state){ $(id).className='dot '+state; }
 const STATE_WORD={cruise:'cruising',freeze:'freeze',reverse:'backing up',turn:'turning until clear',refractory:'settling'};
+/* One request at a time. setInterval(poll,100) piled requests up on a busy
+   phone host until Chrome's 6 connections per origin were all waiting, and
+   the camera push queued behind them and stalled. */
+async function getState(){
+  const ctl=new AbortController(), kill=setTimeout(()=>ctl.abort(),2000);
+  try{ return await (await fetch('/api/state',{signal:ctl.signal,cache:'no-store'})).json(); } finally{ clearTimeout(kill); }
+}
+async function pollLoop(){ const t0=performance.now(); try{ await poll(); }catch{} setTimeout(pollLoop,Math.max(0,100-(performance.now()-t0))); }
 async function poll(){
-  let s; try{ s=await (await fetch('/api/state')).json(); }catch{ $('s_robot').textContent='dashboard offline'; setDot('d_robot','off'); return; }
+  let s; try{ s=await getState(); }catch{ $('s_robot').textContent='dashboard offline'; setDot('d_robot','off'); return; }
   if(!s.ok){ $('why').textContent=s.note||'Waiting'; return; }
   const b=s.brain, r=s.robot, d=s.decision, manual=s.mode==='manual';
   $('s_robot').textContent=r.connected?(r.sim?'simulated':'online'):'offline'; setDot('d_robot',r.connected?(r.sim?'warn':'on'):'off');
   showCamButtons(s.camera.source);
-  $('s_cam').textContent=s.camera.source==='none'?'off':(s.camera.has_frame?s.camera.source:(cam.running?'push, paused':'push, no frames — tap Camera')); setDot('d_cam',s.camera.has_frame?'on':s.camera.source==='none'?'':'warn');
+  $('s_cam').textContent=s.camera.source==='none'?'off':(s.camera.has_frame?s.camera.source:(cam.running?'push, waiting for frames':'push, no frames — tap Camera')); setDot('d_cam',s.camera.has_frame?'on':s.camera.source==='none'?'':'warn');
   const motors=s.policy.enable_motors?['enabled',s.policy.demo_forward?'forward':null,s.policy.allow_turns?'turns':null].filter(Boolean).join(', '):'dry run';
   $('s_motors').textContent=motors; $('t_motors').textContent=motors;
   $('s_step').textContent=b.step_ms+' ms'; $('t_step').textContent=b.step_ms+' ms';
@@ -388,7 +396,7 @@ async function poll(){
   lastFired=b.fired_local||[];
 }
 function post(p){ fetch(p,{method:'POST'}).catch(()=>{}); }
-buildPath(); loadLayout(); setInterval(poll,100);
+buildPath(); loadLayout(); pollLoop();
 addEventListener('resize',drawRaster);
 </script>
 </body>

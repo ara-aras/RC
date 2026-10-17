@@ -14,13 +14,28 @@ feature-detector types directly, on the side where the thing is:
 The encoder below is deliberately simple and hand-tuned. It is *a model* of
 the fly's eye; everything downstream of these neurons is the connectome.
 
-Per eye (left / right half of the frame) we compute:
-    size      fraction of the half that is "object": pixels that differ from
-              a slowly learned background (bright or dark), or are much
-              darker than the scene
-    growth    increase of size since the last frame (looming)
-    motion    mean absolute frame difference (moving stuff)
-    open      brightness of the lower half (free floor ahead)
+How "object" is found (the camera moves with the robot, so a learned still
+background does not work — every pixel changes as the robot drives, and the
+phone's auto-exposure shifts the whole frame's brightness):
+
+    floor model   colour (r, g chromaticity) and brightness relative to the
+                  frame median, learned from a patch just in front of the
+                  wheels — only while the range sensor says the way is clear,
+                  so it never learns an obstacle as floor
+    obstacle      a pixel below the horizon that is not floor, and the one
+                  above it is not floor either (kills single-pixel noise)
+    nearness      per column: how little free floor there is between the
+                  bottom of the image and the first obstacle (0 = floor to
+                  the horizon, 1 = obstacle at the bumper). This is the
+                  classic appearance-based free-space method for monocular
+                  robots; it ignores walls far away and the ceiling.
+
+Per eye (left / right half of the frame):
+    size      nearness of that half (mean blended with its 90th percentile,
+              so a chair leg counts as well as a wall), smoothed over frames
+    growth    increase of the smoothed size (looming)
+    motion    mean absolute difference of the normalised frame (moving stuff)
+    open      1 - size (free floor ahead)
 
 The range sensor is fused as a "threat" so the fly still flinches when the
 camera is off or dark.
@@ -37,19 +52,23 @@ import numpy as np
 # selects the FRACTION of that cell type that receives `volt`, like an object
 # covering part of the eye. Rates downstream then scale with intensity.
 ENCODER = {
-    "loom_gain": 20.0,      # growth (fraction/frame) -> LPLC2 intensity
-    "loom_size": 1.2,       # size (fraction) -> LPLC2, looming cells also like big things
+    "loom_gain": 12.0,      # growth of smoothed nearness (per frame) -> LPLC2 intensity
+    "loom_size": 0.8,       # nearness -> LPLC2, looming cells also like big close things
     "threat_gain": 1.0,     # (range-derived + collision) -> LC4 intensity
-    "collision_size": 0.30, # size above this counts as "about to hit"
+    "collision_size": 0.60, # nearness above this counts as "about to hit"
     "chase_gain": 0.5,      # open-floor asymmetry -> LC10a (steer toward open side)
     "motion_gain": 2.0,     # motion -> LC11 (display only by default)
     "volt": 0.5,            # voltage given to the selected cells
     "min_frac": 0.03,       # below this intensity nothing is driven
     "range_near_cm": 30.0,  # ultrasonic: full threat here
-    "range_far_cm": 60.0,   # ...and none here
-    "bg_rate": 0.03,        # background learning rate per frame (~3 s to absorb a still object)
-    "fg_thresh": 0.13,      # |frame - background| above this = object
-    "dark_thresh": 0.18,    # below (median - this) = object even if in the background
+    "range_far_cm": 60.0,   # ...and none here; also: floor may be learned beyond this
+    "horizon": 0.35,        # rows above this fraction of the height are never obstacles
+    "floor_k": 3.0,         # non-floor = more than k std from the floor model in any feature
+    "floor_min_std": 0.035, # std never below this, so a very uniform floor is not hair-trigger
+    "floor_max_std": 0.10,  # ...and never above this, so the model cannot go blind
+    "relearn_frames": 15,   # clear-range frames in a row that disagree before relearning (~3 s at 5 Hz)
+    "floor_rate": 0.08,     # floor model learning rate per frame (while the way is clear)
+    "smooth": 0.5,          # weight of the new frame in the size EMA
 }
 
 CHANNELS = {
@@ -78,10 +97,13 @@ class Retina:
             raise ValueError(f"unknown encoder parameters: {sorted(unknown)}")
         self.p = {**ENCODER, **encoder}
         self.cells = {ch: {s: np.sort(brain.cells(types, s)) for s in "LR"} for ch, types in CHANNELS.items()}
-        self.prev_gray: np.ndarray | None = None
-        self.background: np.ndarray | None = None
-        self.mask: np.ndarray | None = None          # last object mask, for the dashboard
-        self.prev_size = {"L": 0.0, "R": 0.0}
+        self.prev_norm: np.ndarray | None = None     # last normalised brightness, for motion
+        self.floor_mu: np.ndarray | None = None      # floor model: per-feature mean ...
+        self.floor_sd: np.ndarray | None = None      # ... and spread
+        self.disagree = 0                            # clear frames whose patch did not match the model
+        self.mask: np.ndarray | None = None          # last obstacle mask, for the dashboard
+        self.floor_seen: np.ndarray | None = None    # pixels that matched the floor last frame
+        self.prev_size = {"L": 0.0, "R": 0.0}        # smoothed size from the last frame
         self.state = RetinaState()
         # drive amounts from the last call, keyed "loomL", "threatR", ...
         self.last: dict[str, float] = {f"{ch}{s}": 0.0 for ch in CHANNELS for s in "LR"}
@@ -95,45 +117,117 @@ class Retina:
             return 0.0
         return float((p["range_far_cm"] - distance_cm) / (p["range_far_cm"] - p["range_near_cm"]))
 
-    def _features(self, gray: np.ndarray) -> dict[str, dict[str, float]]:
-        h, w = gray.shape
-        half = w // 2
+    def _pixel_features(self, img: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(features HxWxF, normalised brightness HxW). Features are
+        exposure-invariant: brightness / median brightness of the floor seen
+        last frame (the whole-frame median moves when a big bright or dark
+        object fills half the view), plus r and g chromaticity when the
+        frame has colour."""
+        if img.ndim == 3:
+            s = img.sum(axis=2) + 1e-3
+            lum = img.mean(axis=2)
+        else:
+            lum = img
+        ref = self.floor_seen
+        if ref is not None and ref.shape == lum.shape and ref.sum() >= 50:
+            base = float(np.median(lum[ref]))
+        else:
+            base = float(np.median(lum))
+        norm = lum / max(base, 0.05)
+        norm = np.clip(norm, 0.0, 3.0) / 3.0          # 0..1, median ~0.33
+        if img.ndim == 3:
+            feats = np.stack([norm, img[..., 0] / s, img[..., 1] / s], axis=2)
+        else:
+            feats = norm[..., None]
+        return feats.astype(np.float32), norm.astype(np.float32)
+
+    def _relearn(self, patch: np.ndarray) -> None:
+        # Median / MAD: half the patch can be junk and the model still
+        # describes the other half.
+        mu = np.median(patch, axis=0)
+        self.floor_mu = mu
+        self.floor_sd = 1.4826 * np.median(np.abs(patch - mu), axis=0)
+        self.disagree = 0
+
+    def _features(self, img: np.ndarray, way_clear: bool) -> dict[str, dict[str, float]]:
         p = self.p
-        # "Object" = differs from the slowly learned background (a hand, a
-        # person, a box that arrived), or is much darker than the scene.
-        if self.background is None:
-            self.background = gray.copy()
-        fg = np.abs(gray - self.background) > p["fg_thresh"]
-        dark = gray < max(float(np.median(gray)) - p["dark_thresh"], 0.08)
-        obj = fg | dark
-        # Learn the background only where nothing is detected, so a still
-        # object fades in slowly rather than being absorbed instantly.
-        rate = np.where(obj, p["bg_rate"] * 0.25, p["bg_rate"]).astype(np.float32)
-        self.background += rate * (gray - self.background)
+        feats, norm = self._pixel_features(img)
+        h, w = norm.shape
+        half = w // 2
+        hz = int(round(h * p["horizon"]))
+
+        # Floor reference: the patch right in front of the wheels.
+        patch = feats[h - max(3, h // 8):, int(w * 0.3):int(w * 0.7)].reshape(-1, feats.shape[2])
+        if self.floor_mu is None or self.floor_mu.shape[0] != feats.shape[2]:
+            self._relearn(patch)
+        elif way_clear:
+            # Learn only while the range sensor confirms nothing is close,
+            # and only from patch pixels that already look like floor: an
+            # object beside the ultrasonic's narrow beam can still sit in
+            # the patch, and must not be absorbed into the floor model.
+            sd0 = np.maximum(self.floor_sd, p["floor_min_std"])
+            inl = (np.abs(patch - self.floor_mu) / sd0).max(axis=1) <= p["floor_k"]
+            if inl.mean() >= 0.6:
+                self.disagree = 0
+                r = p["floor_rate"]
+                self.floor_mu = (1 - r) * self.floor_mu + r * patch[inl].mean(0)
+                self.floor_sd = (1 - r) * self.floor_sd + r * patch[inl].std(0)
+            else:
+                # The floor itself changed (rug -> tiles) or the first model
+                # was bad: relearn after it stays so for `relearn_frames` frames.
+                self.disagree += 1
+                if self.disagree >= p["relearn_frames"]:
+                    self._relearn(patch)
+        sd = np.clip(self.floor_sd, p["floor_min_std"], p["floor_max_std"])
+
+        # Not floor in any feature, below the horizon, and confirmed by the
+        # pixel above it (a lone speck of noise is not an obstacle).
+        dev = (np.abs(feats - self.floor_mu) / sd).max(axis=2)
+        nf = dev > p["floor_k"]
+        nf[:hz] = False
+        obj = nf.copy()
+        obj[1:] &= nf[:-1]
+        obj[hz] = False
         self.mask = obj
-        diff = np.abs(gray - self.prev_gray) if self.prev_gray is not None else np.zeros_like(gray)
-        lower = gray[h // 2:, :]
-        feats: dict[str, dict[str, float]] = {"size": {}, "growth": {}, "motion": {}, "open": {}}
+        floor_seen = ~nf
+        floor_seen[:hz] = False
+        self.floor_seen = floor_seen
+
+        # Nearness per column: free floor between the bottom row and the
+        # lowest obstacle pixel, as a fraction of the floor region.
+        region = h - hz
+        flipped = obj[::-1]                          # row 0 = bottom of the image
+        has = flipped.any(axis=0)
+        first = np.where(has, flipped.argmax(axis=0), region)
+        near = 1.0 - np.minimum(first, region) / float(region)
+
+        diff = np.abs(norm - self.prev_norm) if self.prev_norm is not None else np.zeros_like(norm)
+        out: dict[str, dict[str, float]] = {"size": {}, "growth": {}, "motion": {}, "open": {}}
+        a = p["smooth"]
         for side, sl in (("L", slice(0, half)), ("R", slice(half, w))):
-            size = float(obj[:, sl].mean())
-            feats["size"][side] = size
-            feats["growth"][side] = max(0.0, size - self.prev_size[side])
-            feats["motion"][side] = float(diff[:, sl].mean())
-            feats["open"][side] = float(lower[:, sl].mean())
+            col = near[sl]
+            raw = 0.5 * float(col.mean()) + 0.5 * float(np.percentile(col, 90))
+            size = a * raw + (1 - a) * self.prev_size[side]
+            out["size"][side] = size
+            out["growth"][side] = max(0.0, size - self.prev_size[side])
+            out["motion"][side] = float(diff[:, sl].mean())
+            out["open"][side] = 1.0 - size
             self.prev_size[side] = size
-        self.prev_gray = gray
-        return feats
+        self.prev_norm = norm
+        return out
 
     # ------------------------------------------------------------------
-    def inject(self, gray: np.ndarray | None, distance_cm: float, obstacle: bool) -> list:
-        """Build the (neuron indices, voltage) list for brain.step(inject=...)."""
+    def inject(self, image: np.ndarray | None, distance_cm: float, obstacle: bool) -> list:
+        """Build the (neuron indices, voltage) list for brain.step(inject=...).
+        `image` is HxWx3 RGB or HxW grey, values 0..1."""
         p = self.p
         drive = {key: 0.0 for key in self.last}
         rt = self.range_threat(distance_cm, obstacle)
-        st = RetinaState(range_threat=rt, has_frame=gray is not None)
+        st = RetinaState(range_threat=rt, has_frame=image is not None)
 
-        if gray is not None:
-            f = self._features(gray)
+        if image is not None:
+            way_clear = not obstacle and distance_cm >= p["range_far_cm"]
+            f = self._features(image, way_clear)
             st.size, st.growth, st.motion, st.open = f["size"], f["growth"], f["motion"], f["open"]
             for s in "LR":
                 drive[f"loom{s}"] = min(1.0, f["growth"][s] * p["loom_gain"] + f["size"][s] * p["loom_size"])

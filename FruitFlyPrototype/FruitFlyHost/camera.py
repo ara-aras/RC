@@ -33,6 +33,21 @@ class Frame:
     gray: np.ndarray            # float32 HxW in 0..1, RETINA_SIZE
     thumb_jpeg: bytes           # small JPEG for the dashboard
     timestamp: float = field(default_factory=time.monotonic)
+    rgb: np.ndarray | None = None   # float32 HxWx3 in 0..1, same crop as gray
+
+
+def _crop_to_aspect(img: Image.Image, w: int, h: int) -> Image.Image:
+    """Centre-crop to w:h instead of squashing. A phone held upright sends
+    320x427; squeezing that into 64x48 made every object short and wide."""
+    iw, ih = img.size
+    target = w / h
+    if iw / ih > target:                       # too wide: trim the sides
+        nw = int(round(ih * target))
+        x0 = (iw - nw) // 2
+        return img.crop((x0, 0, x0 + nw, ih))
+    nh = int(round(iw / target))               # too tall: keep the lower part,
+    y0 = max(0, ih - nh - (ih - nh) // 4)      # where the floor and obstacles are
+    return img.crop((0, y0, iw, y0 + nh))
 
 
 def decode_jpeg(data: bytes) -> Frame | None:
@@ -41,10 +56,13 @@ def decode_jpeg(data: bytes) -> Frame | None:
         img.load()
     except Exception:
         return None
-    gray = np.asarray(img.convert("L").resize(RETINA_SIZE, Image.BILINEAR), np.float32) / 255.0
+    rgb_img = _crop_to_aspect(img.convert("RGB"), *RETINA_SIZE)
+    small = rgb_img.resize(RETINA_SIZE, Image.BILINEAR)
+    rgb = np.asarray(small, np.float32) / 255.0
+    gray = np.asarray(small.convert("L"), np.float32) / 255.0
     buf = io.BytesIO()
-    img.convert("RGB").resize(THUMB_SIZE, Image.BILINEAR).save(buf, "JPEG", quality=60)
-    return Frame(gray=gray, thumb_jpeg=buf.getvalue())
+    rgb_img.resize(THUMB_SIZE, Image.BILINEAR).save(buf, "JPEG", quality=60)
+    return Frame(gray=gray, thumb_jpeg=buf.getvalue(), rgb=rgb)
 
 
 class CameraSource:

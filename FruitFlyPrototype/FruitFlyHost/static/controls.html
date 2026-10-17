@@ -130,7 +130,12 @@
 const $=id=>document.getElementById(id);
 let mode='fly', held=null, heldBtn=null, repeat=null;
 
-function post(p,body){ return fetch(p,{method:'POST',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined}); }
+// Every request gives up after 1 s so a slow host can never pile up
+// Chrome's 6 connections per origin and starve the drive presses.
+function post(p,body){
+  const ctl=new AbortController(), kill=setTimeout(()=>ctl.abort(),1000);
+  return fetch(p,{method:'POST',signal:ctl.signal,cache:'no-store',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined}).finally(()=>clearTimeout(kill));
+}
 function note(t,bad){ $('note').textContent=t||''; $('note').className='note'+(bad?' bad':''); }
 
 /* ---- mode ---- */
@@ -178,7 +183,8 @@ addEventListener('pagehide',()=>release());
 
 /* ---- poll ---- */
 async function poll(){
-  let s; try{ s=await (await fetch('/api/state')).json(); }catch{ $('t_robot').textContent='bridge offline'; $('t_robot').className='bad'; return; }
+  let s; try{ const ctl=new AbortController(), kill=setTimeout(()=>ctl.abort(),1500);
+    try{ s=await (await fetch('/api/state',{signal:ctl.signal,cache:'no-store'})).json(); } finally{ clearTimeout(kill); } }catch{ $('t_robot').textContent='bridge offline'; $('t_robot').className='bad'; return; }
   if(s.mode&&s.mode!==mode&&!held) showMode(s.mode);
   if(!s.ok) return;
   const r=s.robot, sent=s.sent||{};
@@ -202,7 +208,7 @@ async function poll(){
   else if(!held&&$('note').textContent.startsWith('Fly brain')) note('');
 }
 fetch('/api/mode').then(r=>r.json()).then(j=>showMode(j.mode)).catch(()=>{});
-setInterval(poll,200); poll();
+(async function pollLoop(){ const t0=performance.now(); try{ await poll(); }catch{} setTimeout(pollLoop,Math.max(0,200-(performance.now()-t0))); })();
 </script>
 </body>
 </html>

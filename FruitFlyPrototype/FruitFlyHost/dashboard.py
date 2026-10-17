@@ -28,6 +28,19 @@ from pathlib import Path
 
 import numpy as np
 
+
+class _QuietServer(ThreadingHTTPServer):
+    """The pages abort requests that take over 1-2 s (so a busy phone host
+    cannot pile up connections). A client that hangs up mid-reply is
+    normal then, not an error worth a traceback in the terminal."""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        import sys
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
 STATIC = Path(__file__).parent / "static"
 
 
@@ -107,7 +120,7 @@ class Dashboard:
         self._state: dict = {"ok": False, "note": "waiting for first tick"}
         self._frame: bytes = b""
         self.requests: list[str] = []         # e-stop / clear requests for the bridge
-        self._server = ThreadingHTTPServer(("0.0.0.0", port), self._handler())
+        self._server = _QuietServer(("0.0.0.0", port), self._handler())
         self._server.daemon_threads = True
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="dashboard")
 
