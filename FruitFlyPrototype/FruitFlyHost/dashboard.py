@@ -9,7 +9,7 @@ Routes
     GET  /api/neurons    static neuron layout for the scatter (once)
     GET  /api/frame.jpg  latest camera thumbnail
     GET  /camera         phone page: getUserMedia -> POST /camera/push
-    POST /camera/push    raw JPEG body (used by the /camera page)
+    POST /camera/push    raw RGB (header X-Frame: rgb W H, what the pages send) or a JPEG
     POST /api/estop      ask the bridge to send EMERGENCY_STOP
     POST /api/clear      ask the bridge to send CLEAR_EMERGENCY
     GET  /controls       phone page: fly / manual switch and a drive pad
@@ -221,10 +221,10 @@ class Dashboard:
                 if path == "/camera/push":
                     if dash.push_camera is None:
                         self._json({"ok": False, "error": "start the bridge with --camera push"}, 400)
-                    elif dash.push_camera.push(body):
+                    elif dash.push_camera.push(body, self.headers.get("X-Frame")):
                         self._json({"ok": True})
                     else:
-                        self._json({"ok": False, "error": "bad jpeg"}, 400)
+                        self._json({"ok": False, "error": "bad frame (JPEG, or raw RGB with X-Frame: rgb W H)"}, 400)
                 elif path == "/api/mode":
                     try:
                         mode = json.loads(body or b"{}").get("mode")
@@ -259,7 +259,7 @@ class Dashboard:
                 self.send_response(204)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Frame")
                 self.end_headers()
 
         return Handler

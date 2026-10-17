@@ -189,6 +189,9 @@ def main() -> int:
                     "robot": {**last_status.as_dict(), "connected": connected, "sim": args.sim_robot},
                     "camera": {"source": camera.name, "has_frame": gray is not None,
                                "error": getattr(camera, "error", None),
+                               # push camera diagnostics: seconds since the newest frame arrived, total pushes
+                               "age": (round(camera.age(), 2) if hasattr(camera, "age") and camera.age() is not None else None),
+                               "pushes": getattr(camera, "pushes", None),
                                # what the retina sees, 32x24 grey levels for the eye views
                                "eye": (np.round(gray[::2, ::2] * 255).astype(int).ravel().tolist()
                                        if gray is not None else None),

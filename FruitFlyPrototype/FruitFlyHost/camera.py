@@ -56,6 +56,10 @@ def decode_jpeg(data: bytes) -> Frame | None:
         img.load()
     except Exception:
         return None
+    return frame_from_image(img)
+
+
+def frame_from_image(img: Image.Image) -> Frame:
     rgb_img = _crop_to_aspect(img.convert("RGB"), *RETINA_SIZE)
     small = rgb_img.resize(RETINA_SIZE, Image.BILINEAR)
     rgb = np.asarray(small, np.float32) / 255.0
@@ -85,23 +89,60 @@ class PushCamera(CameraSource):
 
     def __init__(self, stale_after: float = 2.0):
         self._frame: Frame | None = None
+        self._raw: tuple[bytes, float] | None = None   # newest JPEG, not yet decoded
         self._lock = threading.Lock()
         self.stale_after = stale_after
+        self.pushes = 0
+        self.error: str | None = None
 
-    def push(self, jpeg: bytes) -> bool:
-        frame = decode_jpeg(jpeg)
-        if frame is None:
-            return False
+    def push(self, data: bytes, fmt: str | None = None) -> bool:
+        """`data` is a JPEG, or raw RGB bytes when `fmt` is "rgb W H" (what
+        eyecam.js sends: no JPEG encode on the phone's busy CPU).
+        Just keep the bytes and answer at once: decoding here, on every
+        push, cost CPU for frames the brain never used; latest() decodes
+        only the newest one."""
+        if fmt:
+            try:
+                kind, w, h = fmt.split()
+                w, h = int(w), int(h)
+            except ValueError:
+                return False
+            if kind != "rgb" or not (8 <= w <= 640 and 8 <= h <= 640) or len(data) != w * h * 3:
+                return False
+            item = ("rgb", w, h, data)
+        else:
+            if len(data) < 4 or data[:2] != b"\xff\xd8":
+                return False
+            item = ("jpeg", 0, 0, data)
         with self._lock:
-            self._frame = frame
+            self._raw = (item, time.monotonic())
+            self.pushes += 1
         return True
 
     def latest(self) -> Frame | None:
+        with self._lock:
+            raw, self._raw = self._raw, None
+        if raw is not None:
+            kind, w, h, data = raw[0]
+            frame = (frame_from_image(Image.frombytes("RGB", (w, h), data)) if kind == "rgb"
+                     else decode_jpeg(data))
+            if frame is not None:
+                frame.timestamp = raw[1]          # age counts from arrival
+                with self._lock:
+                    self._frame = frame
+                self.error = None
+            else:
+                self.error = "bad frame from the browser"
         with self._lock:
             frame = self._frame
         if frame and time.monotonic() - frame.timestamp > self.stale_after:
             return None
         return frame
+
+    def age(self) -> float | None:
+        with self._lock:
+            ts = self._raw[1] if self._raw else (self._frame.timestamp if self._frame else None)
+        return None if ts is None else time.monotonic() - ts
 
 
 class _ThreadedCamera(CameraSource):

@@ -160,23 +160,26 @@ class Retina:
         patch = feats[h - max(3, h // 8):, int(w * 0.3):int(w * 0.7)].reshape(-1, feats.shape[2])
         if self.floor_mu is None or self.floor_mu.shape[0] != feats.shape[2]:
             self._relearn(patch)
-        elif way_clear:
-            # Learn only while the range sensor confirms nothing is close,
-            # and only from patch pixels that already look like floor: an
-            # object beside the ultrasonic's narrow beam can still sit in
-            # the patch, and must not be absorbed into the floor model.
+        else:
+            # Learn only from patch pixels that already look like floor: an
+            # object beside the ultrasonic's narrow beam can sit in the
+            # patch and must not be absorbed. Faster while the range sensor
+            # confirms the way is clear, slowly otherwise (lighting drifts).
             sd0 = np.maximum(self.floor_sd, p["floor_min_std"])
             inl = (np.abs(patch - self.floor_mu) / sd0).max(axis=1) <= p["floor_k"]
             if inl.mean() >= 0.6:
                 self.disagree = 0
-                r = p["floor_rate"]
+                r = p["floor_rate"] * (1.0 if way_clear else 0.25)
                 self.floor_mu = (1 - r) * self.floor_mu + r * patch[inl].mean(0)
                 self.floor_sd = (1 - r) * self.floor_sd + r * patch[inl].std(0)
             else:
-                # The floor itself changed (rug -> tiles) or the first model
-                # was bad: relearn after it stays so for `relearn_frames` frames.
+                # The model no longer matches what is under the camera: the
+                # floor changed (rug -> tiles), the first model was bad, or
+                # the phone is not on the robot (held in a hand), so the
+                # robot's range sensor says nothing about this view. Relearn
+                # after ~1 s if the range is clear, ~3 s if not.
                 self.disagree += 1
-                if self.disagree >= p["relearn_frames"]:
+                if self.disagree >= (p["relearn_frames"] // 3 if way_clear else p["relearn_frames"]):
                     self._relearn(patch)
         sd = np.clip(self.floor_sd, p["floor_min_std"], p["floor_max_std"])
 

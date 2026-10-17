@@ -24,8 +24,8 @@
 <div id="preview"></div>
 <div class="row">
   <label>Camera <select id="facing"><option value="environment">rear</option><option value="user">front</option></select></label>
-  <label>FPS <input id="fps" type="number" min="1" max="15" value="8" style="width:60px"></label>
-  <label>Width <input id="w" type="number" min="160" max="640" step="80" value="320" style="width:70px"></label>
+  <label>FPS <input id="fps" type="number" min="1" max="15" value="10" style="width:60px"></label>
+  <label>Width <input id="w" type="number" min="64" max="320" step="32" value="128" style="width:70px"></label>
 </div>
 <div class="row">
   <button id="start">Start streaming</button>
@@ -41,7 +41,7 @@ const cam=EyeCam({onStatus:t=>{stat.textContent=t;}});
 cam.video.id='v'; cam.video.style.width='100%'; cam.video.style.maxWidth='480px'; cam.video.style.borderRadius='6px';
 document.getElementById('preview').replaceWith(cam.video);
 document.getElementById('start').onclick=async()=>{
-  const ok=await cam.start({facing:document.getElementById('facing').value,fps:+document.getElementById('fps').value||8,width:+document.getElementById('w').value||320});
+  const ok=await cam.start({facing:document.getElementById('facing').value,fps:+document.getElementById('fps').value||10,width:+document.getElementById('w').value||128});
   if(ok){document.getElementById('start').disabled=true;document.getElementById('stop').disabled=false;}
 };
 document.getElementById('stop').onclick=()=>{cam.stop();document.getElementById('start').disabled=false;document.getElementById('stop').disabled=true;};

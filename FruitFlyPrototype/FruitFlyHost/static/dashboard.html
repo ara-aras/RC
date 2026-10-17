@@ -229,12 +229,20 @@ brainC.addEventListener('pointerdown',e=>{dragging={x:e.clientX,y:e.clientY};bra
 brainC.addEventListener('pointermove',e=>{if(!dragging)return;yaw+=(e.clientX-dragging.x)*0.006;pitch=Math.max(-1.2,Math.min(1.2,pitch+(e.clientY-dragging.y)*0.006));dragging={x:e.clientX,y:e.clientY};autoSpin=false;});
 brainC.addEventListener('pointerup',()=>dragging=null);
 brainC.addEventListener('pointercancel',()=>dragging=null);
-function drawBrain(){
-  const dpr=window.devicePixelRatio||1, W=brainC.clientWidth, H=brainC.clientHeight;
+/* The scatter is ~20k points sorted and drawn per frame. At 60 fps on a
+   phone that ate Chrome's main thread, which is also the thread that grabs
+   and uploads camera frames, so the camera stalled. Cap it at 12 fps and
+   skip it entirely while it is scrolled out of view. */
+let brainVisible=true, lastBrainDraw=0;
+if('IntersectionObserver' in window) new IntersectionObserver(es=>{ brainVisible=es[0].isIntersecting; }).observe(brainC);
+function drawBrain(ts){
+  if(!brainVisible || document.hidden || (ts||0)-lastBrainDraw < 1000/12){ requestAnimationFrame(drawBrain); return; }
+  lastBrainDraw=ts||0;
+  const dpr=Math.min(window.devicePixelRatio||1,2), W=brainC.clientWidth, H=brainC.clientHeight;
   if(brainC.width!==W*dpr||brainC.height!==H*dpr){brainC.width=W*dpr;brainC.height=H*dpr;}
   const g=brainC.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
   if(layout){
-    if(autoSpin) yaw+=0.0025;
+    if(autoSpin) yaw+=0.0125;            // per drawn frame at 12 fps (was 0.0025 at 60)
     const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
     const phone=W<=900;
     const n=layout.x.length, scale=Math.min(W*0.62,H*0.5)*0.96, cx=W/2, cyy=H/2-(phone?6:42);
@@ -366,7 +374,7 @@ async function poll(){
   const b=s.brain, r=s.robot, d=s.decision, manual=s.mode==='manual';
   $('s_robot').textContent=r.connected?(r.sim?'simulated':'online'):'offline'; setDot('d_robot',r.connected?(r.sim?'warn':'on'):'off');
   showCamButtons(s.camera.source);
-  $('s_cam').textContent=s.camera.source==='none'?'off':(s.camera.has_frame?s.camera.source:(cam.running?'push, waiting for frames':'push, no frames — tap Camera')); setDot('d_cam',s.camera.has_frame?'on':s.camera.source==='none'?'':'warn');
+  $('s_cam').textContent=s.camera.source==='none'?'off':(s.camera.has_frame?s.camera.source:(cam.running?('push, waiting for frames'+(s.camera.age!=null?` (last ${s.camera.age.toFixed(1)} s ago)`:'')):'push, no frames — tap Camera')); setDot('d_cam',s.camera.has_frame?'on':s.camera.source==='none'?'':'warn');
   const motors=s.policy.enable_motors?['enabled',s.policy.demo_forward?'forward':null,s.policy.allow_turns?'turns':null].filter(Boolean).join(', '):'dry run';
   $('s_motors').textContent=motors; $('t_motors').textContent=motors;
   $('s_step').textContent=b.step_ms+' ms'; $('t_step').textContent=b.step_ms+' ms';
